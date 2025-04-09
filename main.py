@@ -8,6 +8,17 @@ import sqlite3
 import datetime
 import os
 from dotenv import load_dotenv
+from flask import Flask
+
+       app = Flask(__name__)
+       
+       @app.route('/')
+       def health_check():
+           return "OK", 200
+       
+       if __name__ == '__main__':
+           import threading
+           threading.Thread(target=app.run, kwargs={'host':'0.0.0.0','port':8000}).start()
 
 # Load environment variables
 load_dotenv()
