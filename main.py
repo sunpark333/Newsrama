@@ -8,30 +8,31 @@ import sqlite3
 import datetime
 import os
 from dotenv import load_dotenv
-from flask import Flask
+from flask import Flask, request
+import threading
 
-       app = Flask(__name__)
-       
-       @app.route('/')
-       def health_check():
-           return "OK", 200
-       
-       if __name__ == '__main__':
-           import threading
-           threading.Thread(target=app.run, kwargs={'host':'0.0.0.0','port':8000}).start()
+# Flask Health Check Server Setup
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "OK", 200
+
+def run_flask_app():
+    app.run(host='0.0.0.0', port=8000, debug=False, use_reloader=False)
 
 # Load environment variables
 load_dotenv()
 
 # Configuration from .env
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS').split(',')]  # Multiple admin IDs
-LOG_CHANNEL_ID = int(os.getenv('LOG_CHANNEL_ID'))  # Negative channel ID
-CHANNEL_USERNAME = os.getenv('CHANNEL_USERNAME', '@your_channel')  # Default value if not set
-DB_NAME = os.getenv('DB_NAME', 'news_bot.db')  # Default database name
-WELCOME_IMAGE_FILE_ID = os.getenv('WELCOME_IMAGE_FILE_ID')  # File ID of the welcome image
+ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS').split(',')]
+LOG_CHANNEL_ID = int(os.getenv('LOG_CHANNEL_ID'))
+CHANNEL_USERNAME = os.getenv('CHANNEL_USERNAME', '@your_channel')
+DB_NAME = os.getenv('DB_NAME', 'news_bot.db')
+WELCOME_IMAGE_FILE_ID = os.getenv('WELCOME_IMAGE_FILE_ID')
 
-# Logging setup (unchanged)
+# Logging setup
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -194,7 +195,7 @@ async def post_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Broadcast to all chats (except admin)
     success = 0
     failed = 0
-    all_chats = [chat for chat in db.get_all_chats() if chat[0] not in ADMIN_IDS]  # Exclude admin chats
+    all_chats = [chat for chat in db.get_all_chats() if chat[0] not in ADMIN_IDS]
     total_chats = len(all_chats)
 
     progress_msg = await context.bot.send_message(
@@ -230,7 +231,6 @@ async def post_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             failed += 1
             logger.error(f"Failed to send to {chat_id}: {e}")
         
-        # Update progress (every 10 chats)
         if (success + failed) % 10 == 0:
             await context.bot.edit_message_text(
                 chat_id=LOG_CHANNEL_ID,
@@ -270,7 +270,6 @@ async def broadcast_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
 
-    # Check if the message is a reply to a poll
     if not update.message.reply_to_message or not update.message.reply_to_message.poll:
         await update.message.reply_text("⚠️ Please reply to a poll message with /broadcastpoll to broadcast it.")
         return
@@ -283,10 +282,9 @@ async def broadcast_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     explanation = original_poll.explanation if original_poll.explanation else None
     open_period = original_poll.open_period if original_poll.open_period else None
 
-    # Broadcast to all chats (except admin)
     success = 0
     failed = 0
-    all_chats = [chat for chat in db.get_all_chats() if chat[0] not in ADMIN_IDS]  # Exclude admin chats
+    all_chats = [chat for chat in db.get_all_chats() if chat[0] not in ADMIN_IDS]
     total_chats = len(all_chats)
 
     progress_msg = await context.bot.send_message(
@@ -314,7 +312,6 @@ async def broadcast_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             failed += 1
             logger.error(f"Failed to send poll to {chat_id}: {e}")
         
-        # Update progress (every 10 chats)
         if (success + failed) % 10 == 0:
             await context.bot.edit_message_text(
                 chat_id=LOG_CHANNEL_ID,
@@ -326,7 +323,6 @@ async def broadcast_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      f"❌ Failed: {failed}"
             )
 
-    # Final log
     log_msg = (
         f"📊 Poll broadcast complete\n\n"
         f"❓ Question: {question[:50]}...\n"
@@ -361,10 +357,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🆔 Log channel: `{LOG_CHANNEL_ID}`"
     )
 
-    # Create keyboard with back button
-    keyboard = [
-        [InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]
-    ]
+    keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
@@ -373,7 +366,6 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-    # Log that someone checked stats
     logger.info(f"Statistics checked by user: {update.effective_user.full_name} (ID: {update.effective_user.id})")
     await send_log(context, f"📊 Statistics checked\n👤 User: {update.effective_user.full_name}")
 
@@ -383,10 +375,8 @@ async def handle_back_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     if query.data == "back_to_start":
-        # Reuse the start handler's welcome message
         chat = update.effective_chat
         
-        # Create the same keyboard as in handle_start
         keyboard = [
             [InlineKeyboardButton("➕ ADD ME TO YOUR GROUP ➕", url=f"https://t.me/{context.bot.username}?startgroup=true")],
             [InlineKeyboardButton("📢 JOIN OUR NEWS CHANNEL 📢", url=f"https://t.me/{CHANNEL_USERNAME}")]
@@ -427,14 +417,18 @@ async def handle_back_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 parse_mode='Markdown'
             )
         
-        # Delete the stats message
         await query.message.delete()
 
 def main():
     """Launch the bot"""
+    # Start Flask health check server in a separate thread
+    flask_thread = threading.Thread(target=run_flask_app, daemon=True)
+    flask_thread.start()
+
+    # Create Telegram bot application
     app = Application.builder().token(TOKEN).build()
 
-    # Admin filter (only for post_news)
+    # Admin filter
     admin_filter = filters.User(ADMIN_IDS)
 
     # Command handlers
@@ -442,15 +436,15 @@ def main():
     app.add_handler(CommandHandler("stats", show_stats))
     app.add_handler(CommandHandler("broadcastpoll", broadcast_poll, filters=admin_filter))
     
-    # Add callback handler for back button
+    # Callback handler
     app.add_handler(CallbackQueryHandler(handle_back_button))
 
-    # Handlers for admin messages (without commands)
+    # Message handlers
     app.add_handler(MessageHandler(filters.PHOTO & admin_filter, post_news))
     app.add_handler(MessageHandler(filters.VIDEO & admin_filter, post_news))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, post_news))
 
-    # Handler for new members
+    # New members handler
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
 
     # Start the bot
